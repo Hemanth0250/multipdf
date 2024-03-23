@@ -74,7 +74,7 @@ def user_input(user_question, conversation_history):
 
 def main():
     st.set_page_config("Chat PDF")
-    st.header("Chat with PDF using Gemini💁")
+    st.header("Docu Detective.ai💁")
 
     user_question = st.text_input("Ask a Question from the PDF Files")
     conversation_history = st.session_state.get("conversation_history", [])
