@@ -1,0 +1,11 @@
+google-search_results
+streamlit
+google-generativeai
+python-dotenv
+langchain
+PyPDF2
+faiss-cpu
+langchain_google_genai
+openai==0.27.6
+altair==4
+tiktoken==0.4.0
