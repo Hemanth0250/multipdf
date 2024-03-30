@@ -10,6 +10,14 @@ from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from translate import Translator
 from langdetect import detect
+#import kivy
+#from kivy.app import runTouchApp
+#from kivy.uix.gridlayout import GridLayout
+
+#from kivy.uix.textinput import TextInput
+#from kivy.uix.button import Button
+
+
 
 # Add the necessary imports for text-to-speech and speech-to-text
 import pyttsx3
