@@ -1,38 +1,43 @@
 import streamlit as st
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+import docx
 import os
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import pandas as pd
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from translate import Translator
 from langdetect import detect
-#import kivy
-#from kivy.app import runTouchApp
-#from kivy.uix.gridlayout import GridLayout
-
-#from kivy.uix.textinput import TextInput
-#from kivy.uix.button import Button
-
-
-
-# Add the necessary imports for text-to-speech and speech-to-text
 import pyttsx3
 import speech_recognition as sr
+import googlesearch
 
 load_dotenv()
 os.getenv("GOOGLE_API_KEY")
-# genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-def get_pdf_text(pdf_docs):
+def extract_text_from_pdf(pdf_file):
     text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
+    pdf_reader = PdfReader(pdf_file)
+    for page in pdf_reader.pages:
+        text += page.extract_text()
+    return text
+
+def extract_text_from_word(word_file):
+    text = ""
+    doc = docx.Document(word_file)
+    for para in doc.paragraphs:
+        text += para.text
+    return text
+
+def extract_text_from_excel(excel_file):
+    text = ""
+    df = pd.read_excel(excel_file)
+    for column in df.columns:
+        for cell in df[column]:
+            text += str(cell) + " "
     return text
 
 def get_text_chunks(text):
@@ -68,66 +73,86 @@ def translate_text(text, source_language, target_language):
     return translation
 
 def user_input(user_question, conversation_history, source_language, target_language):
-    # If the source language is not English, translate the question to English
     if source_language != "en":
         user_question_translated = translate_text(user_question, source_language, "en")
     else:
         user_question_translated = user_question
 
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    
-    # Load FAISS index with dangerous deserialization enabled
     new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
     docs = new_db.similarity_search(user_question_translated)
 
     chain = get_conversational_chain()
     
-    response = chain(
+    response = chain.invoke(
         {"input_documents": docs, "question": user_question_translated},
         return_only_outputs=True
     )
 
-    # Translate the response back to the target language
     if target_language != "en":
         response_translated = translate_text(response["output_text"], "en", target_language)
     else:
         response_translated = response["output_text"]
 
+    if "answer is not available in the context" in response_translated.lower():
+        # Fallback to web search
+        search_results = list(googlesearch.search(user_question, num=1, stop=1))
+        if search_results:
+            response_translated = "I couldn't find the answer in the document. Here's what I found online:\n"
+            response_translated += search_results[0]
+        else:
+            response_translated = "I couldn't find the answer in the document or online."
+
     conversation_history.append({"question": user_question, "response": response_translated})
     return response_translated
 
 def main():
-    st.set_page_config("Chat PDF")
-    st.header("Docu Detective.ai💁")
+    st.set_page_config("Chat Docs")
+    st.title("Docu Detective.ai💁")
 
-    user_question = st.text_input("Ask a Question from the PDF Files")
+    user_question = st.text_input("Ask a Question from the Documents")
     conversation_history = st.session_state.get("conversation_history", [])
 
-    st.subheader("Select Languages:")
-    col1, col2 = st.columns(2)
-    with col1:
-        source_language = st.radio("Source Language:", options=["en", "fr", "es"], key="source_language")
-    with col2:
-        target_language = st.radio("Target Language:", options=["en", "fr", "es"], key="target_language")
+    with st.sidebar:
+        st.title("Menu:")
+        documents = st.file_uploader("Upload your Documents", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing..."):
+                raw_text = ""
+                for doc_file in documents:
+                    if doc_file.name.endswith('.pdf'):
+                        raw_text += extract_text_from_pdf(doc_file)
+                    elif doc_file.name.endswith('.docx'):
+                        raw_text += extract_text_from_word(doc_file)
+                    elif doc_file.name.endswith('.txt'):
+                        raw_text += doc_file.getvalue().decode("utf-8")
+                    elif doc_file.name.endswith('.xlsx'):
+                        raw_text += extract_text_from_excel(doc_file)
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store(text_chunks)
+                st.success("Done")
+
+        st.header("Languages:")
+        source_language = st.radio("Source Language:", options=["en", "fr", "es", "hi"], key="source_language")
+        target_language = st.radio("Target Language:", options=["en", "fr", "es", "hi"], key="target_language")
 
     if user_question:
-        response = user_input(user_question, conversation_history, source_language, target_language)
-        st.write("Reply: ", response)
+        st.markdown("---")
+        st.write("User: ", user_question)
 
-    # Add the text-to-speech and speech-to-text buttons
-    st.subheader("Additional Options:")
-    col1, col2 = st.columns([1, 1])
-    with col1:
+        response = user_input(user_question, conversation_history, source_language, target_language)
+
+        st.write("Reply: ", response)
+        st.markdown("---")
+
+    with st.sidebar:
+        st.subheader("Additional Options:")
         if st.button("Text-to-Speech", key="text_to_speech"):
-            # Perform text-to-speech
             engine = pyttsx3.init()
             engine.say(response)
             engine.runAndWait()
-        st.markdown('<style>div.stButton>button {background-color: #4CAF50; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 200px;}</style>', unsafe_allow_html=True)
 
-    with col2:
         if st.button("Speech-to-Text", key="speech_to_text"):
-            # Perform speech-to-text
             recognizer = sr.Recognizer()
             with sr.Microphone() as source:
                 st.write("Speak now...")
@@ -139,19 +164,13 @@ def main():
                 st.write("Sorry, could not understand audio.")
             except sr.RequestError as e:
                 st.write("Error:", e)
-        st.markdown('<style>div.stButton>button {background-color: #008CBA; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 200px;}</style>', unsafe_allow_html=True)
 
-    with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
-        if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done")
+        if st.button("Translate", key="translate"):
+            user_question = st.text_input("Enter text to translate")
+            if user_question:
+                translation = translate_text(user_question, source_language, target_language)
+                st.write("Translation:", translation)
 
-    # Display conversation history
     st.subheader("Conversation History")
     for item in conversation_history:
         st.write("Question: ", item["question"])
