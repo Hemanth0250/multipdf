@@ -14,3 +14,9 @@ google-cloud-translate==3.3.1
 langdetect
 pyttsx3
 SpeechRecognition
+python-docx
+pandas
+serpapi
+google
+requests
+beautifulsoup4
