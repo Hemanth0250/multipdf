@@ -20,3 +20,9 @@ serpapi
 google
 requests
 beautifulsoup4
+pytesseract
+PyMuPDF
+fitz
+frontend
+tools
+io
