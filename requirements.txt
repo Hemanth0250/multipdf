@@ -26,3 +26,14 @@ fitz
 frontend
 tools
 io
+streamlit
+PyPDF2
+langchain
+langchain_google_genai
+langchain_community
+dotenv
+translate
+pyttsx3
+speech_recognition
+docx
+
