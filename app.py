@@ -1,41 +1,78 @@
+import tempfile
 import streamlit as st
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+import docx
 import os
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import pandas as pd
+from pdf2image import convert_from_path
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from translate import Translator
+from langdetect import detect
 import pyttsx3
 import speech_recognition as sr
-from docx import Document
+import googlesearch
+from PIL import Image
+import pytesseract
+
+# Specify the path to the Tesseract executable
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 load_dotenv()
 os.getenv("GOOGLE_API_KEY")
 
-def get_pdf_text(pdf_docs):
+def extract_text_from_pdf(pdf_file):
     text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
+    pdf_reader = PdfReader(pdf_file)
+    
+    # Iterate through each page and extract text
+    for page in pdf_reader.pages:
+        extracted_text = page.extract_text()
+        # Check if text is extracted from the current page
+        if extracted_text:
+            text += extracted_text
+        else:
+            temp_dir = tempfile.TemporaryDirectory()
+            temp_dir_path = temp_dir.name
+            images=convert_from_path(pdf_file,500,poppler_path=r'C:\Users\Pranav\poppler-24.02.0\Library\bin')
+            all_text=[]
+            for i, image in enumerate(images):
+                image_path = f"{temp_dir_path}/page_{i + 1}.jpg"
+                image.save(image_path, 'JPEG')
+                itext = extract_text_from_image(image_path)
+                all_text.append(itext)
+            text='\n'.join(all_text)
+            temp_dir.cleanup()
+    if not text:
+        # You might want to handle this scenario differently based on your application's requirements
+        raise Exception("No text extracted from the PDF file")
     return text
 
-def get_txt_text(txt_docs):
+def extract_text_from_word(word_file):
     text = ""
-    for txt in txt_docs:
-        text += txt.read().decode('utf-8')
+    doc = docx.Document(word_file)
+    for para in doc.paragraphs:
+        text += para.text
+    print("Extracted text from Word:", text)
     return text
 
-def get_docx_text(docx_docs):
+def extract_text_from_excel(excel_file):
     text = ""
-    for docx in docx_docs:
-        doc = Document(docx)
-        for para in doc.paragraphs:
-            text += para.text + "\n"
+    df = pd.read_excel(excel_file)
+    for column in df.columns:
+        for cell in df[column]:
+            text += str(cell) + " "
+    print("Extracted text from Excel:", text)
+    return text
+
+def extract_text_from_image(image_file):
+    image = Image.open(image_file)
+    text = pytesseract.image_to_string(image)
+    print("Extracted text from Image:", text)
     return text
 
 def get_text_chunks(text):
@@ -45,8 +82,43 @@ def get_text_chunks(text):
 
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+    
+    # Print or log the text chunks for debugging
+    print("Text chunks:", text_chunks)
+    
+    try:
+        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+        vector_store.save_local("faiss_index")
+    except IndexError as e:
+        st.error(f"IndexError occurred: {e}")
+        st.error("Error: Failed to create vector store. Please check your input.")
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        st.error("Error: Failed to create vector store.")
+
+    
+def get_vector_store_with_error_handling(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    try:
+        # Add logging to print out text chunks for debugging
+        print("Text chunks:", text_chunks)
+        
+        # Check if text_chunks is empty
+        if not text_chunks:
+            raise ValueError("Input text chunks are empty")
+
+        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+        vector_store.save_local("faiss_index")
+    except ValueError as ve:
+        st.error(f"ValueError occurred: {ve}")
+        st.error("Error: Input text chunks are empty.")
+    except IndexError as e:
+        st.error(f"IndexError occurred: {e}")
+        st.error("Error: Failed to create vector store. Please check your input.")
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        st.error("Error: Failed to create vector store.")
+
 
 def get_conversational_chain():
     prompt_template = """
@@ -81,7 +153,8 @@ def user_input(user_question, conversation_history, source_language, target_lang
     docs = new_db.similarity_search(user_question_translated)
 
     chain = get_conversational_chain()
-    response = chain(
+    
+    response = chain.invoke(
         {"input_documents": docs, "question": user_question_translated},
         return_only_outputs=True
     )
@@ -91,37 +164,82 @@ def user_input(user_question, conversation_history, source_language, target_lang
     else:
         response_translated = response["output_text"]
 
+    if "answer is not available in the context" in response_translated.lower():
+        # Fallback to web search
+        search_results = list(googlesearch.search(user_question, num=1, stop=1))
+        if search_results:
+            response_translated = "I couldn't find the answer in the document. Here's what I found online:\n"
+            response_translated += search_results[0]
+        else:
+            response_translated = "I couldn't find the answer in the document or online."
+
     conversation_history.append({"question": user_question, "response": response_translated})
     return response_translated
 
 def main():
-    st.set_page_config("Chat PDF")
-    st.header("Docu Detective.ai💁")
+    st.set_page_config("Chat Docs")
+    st.title("Docu Detective.ai💁")
 
     user_question = st.text_input("Ask a Question from the Documents")
     conversation_history = st.session_state.get("conversation_history", [])
 
-    st.subheader("Select Languages:")
-    col1, col2 = st.columns(2)
-    with col1:
-        source_language = st.radio("Source Language:", options=["en", "fr", "es"], key="source_language")
-    with col2:
-        target_language = st.radio("Target Language:", options=["en", "fr", "es"], key="target_language")
+    with st.sidebar:
+        st.title("Menu:")
+        documents = st.file_uploader("Upload your Documents", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing..."):
+                raw_text = ""
+                for doc_file in documents:
+                    if doc_file.name.endswith('.pdf'):
+                        raw_text += extract_text_from_pdf(doc_file)
+                    elif doc_file.name.endswith('.docx'):
+                        raw_text += extract_text_from_word(doc_file)
+                    elif doc_file.name.endswith('.txt'):
+                        raw_text += doc_file.getvalue().decode("utf-8")
+                    elif doc_file.name.endswith('.xlsx'):
+                        raw_text += extract_text_from_excel(doc_file)
+                    elif doc_file.name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                        raw_text += extract_text_from_image(doc_file)
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store_with_error_handling(text_chunks)
+                st.success("Done")
+
+        # Preview button below process button
+        if st.button("Preview Documents"):
+            for doc_file in documents:
+                if doc_file.name.endswith('.pdf'):
+                    st.subheader("PDF Content:")
+                    st.write(extract_text_from_pdf(doc_file))
+                elif doc_file.name.endswith('.docx'):
+                    st.subheader("DOCX Content:")
+                    st.write(extract_text_from_word(doc_file))
+                elif doc_file.name.endswith('.txt'):
+                    st.subheader("TXT Content:")
+                    st.write(doc_file.getvalue().decode("utf-8"))
+                elif doc_file.name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                    st.subheader("Image Content:")
+                    st.write(extract_text_from_image(doc_file))
+
+        st.header("Languages:")
+        source_language = st.radio("Source Language:", options=["en", "fr", "es", "hi"], key="source_language")
+        target_language = st.radio("Target Language:", options=["en", "fr", "es", "hi"], key="target_language")
 
     if user_question:
-        response = user_input(user_question, conversation_history, source_language, target_language)
-        st.write("Reply: ", response)
+        st.markdown("---")
+        st.write("User: ", user_question)
 
-    
-    col1, col2 = st.columns([1, 1])
-    with col1:
+        response = user_input(user_question, conversation_history, source_language, target_language)
+
+        st.write("Reply: ", response)
+        st.markdown("---")
+
+    with st.sidebar:
+        st.subheader("Additional Options:")
         if st.button("Text-to-Speech", key="text_to_speech"):
             engine = pyttsx3.init()
             engine.say(response)
             engine.runAndWait()
-        st.markdown('<style>div.stButton>button {background-color: #4CAF50; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 200px;}</style>', unsafe_allow_html=True)
 
-    with col2:
         if st.button("Speech-to-Text", key="speech_to_text"):
             recognizer = sr.Recognizer()
             with sr.Microphone() as source:
@@ -134,27 +252,6 @@ def main():
                 st.write("Sorry, could not understand audio.")
             except sr.RequestError as e:
                 st.write("Error:", e)
-        st.markdown('<style>div.stButton>button {background-color: #008CBA; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 200px;}</style>', unsafe_allow_html=True)
-
-    with st.sidebar:
-        st.title("Menu:")
-        uploaded_files = st.file_uploader("Upload your PDF, TXT, or DOCX Files and Click on the Submit & Process Button", accept_multiple_files=True, type=['pdf', 'txt', 'docx'])
-        if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = ""
-                if uploaded_files:
-                    pdf_files = [file for file in uploaded_files if file.type == "application/pdf"]
-                    txt_files = [file for file in uploaded_files if file.type == "text/plain"]
-                    docx_files = [file for file in uploaded_files if file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
-                    if pdf_files:
-                        raw_text += get_pdf_text(pdf_files)
-                    if txt_files:
-                        raw_text += get_txt_text(txt_files)
-                    if docx_files:
-                        raw_text += get_docx_text(docx_files)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done")
 
     st.subheader("Conversation History")
     for item in conversation_history:
