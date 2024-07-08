@@ -12,7 +12,6 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from translate import Translator
-from langdetect import detect
 import pyttsx3
 import speech_recognition as sr
 import googlesearch
@@ -27,29 +26,29 @@ os.getenv("GOOGLE_API_KEY")
 
 def extract_text_from_pdf(pdf_file):
     text = ""
-    pdf_reader = PdfReader(pdf_file)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        temp_file.write(pdf_file.read())
+        temp_file_path = temp_file.name
+
+    pdf_reader = PdfReader(temp_file_path)
     
-    # Iterate through each page and extract text
     for page in pdf_reader.pages:
         extracted_text = page.extract_text()
-        # Check if text is extracted from the current page
         if extracted_text:
             text += extracted_text
         else:
-            temp_dir = tempfile.TemporaryDirectory()
-            temp_dir_path = temp_dir.name
-            images=convert_from_path(pdf_file,500,poppler_path=r'C:\Users\Pranav\poppler-24.02.0\Library\bin')
-            all_text=[]
+            images = convert_from_path(temp_file_path, 500, poppler_path=r'C:\Users\Pranav\poppler-24.02.0\Library\bin')
+            all_text = []
             for i, image in enumerate(images):
-                image_path = f"{temp_dir_path}/page_{i + 1}.jpg"
-                image.save(image_path, 'JPEG')
-                itext = extract_text_from_image(image_path)
-                all_text.append(itext)
-            text='\n'.join(all_text)
-            temp_dir.cleanup()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as img_file:
+                    image.save(img_file.name, 'JPEG')
+                    all_text.append(extract_text_from_image(img_file.name))
+            text = '\n'.join(all_text)
+    
     if not text:
-        # You might want to handle this scenario differently based on your application's requirements
         raise Exception("No text extracted from the PDF file")
+    
+    os.remove(temp_file_path)
     return text
 
 def extract_text_from_word(word_file):
@@ -96,7 +95,6 @@ def get_vector_store(text_chunks):
         st.error(f"An unexpected error occurred: {e}")
         st.error("Error: Failed to create vector store.")
 
-    
 def get_vector_store_with_error_handling(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     try:
@@ -118,7 +116,6 @@ def get_vector_store_with_error_handling(text_chunks):
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         st.error("Error: Failed to create vector store.")
-
 
 def get_conversational_chain():
     prompt_template = """
@@ -177,7 +174,7 @@ def user_input(user_question, conversation_history, source_language, target_lang
     return response_translated
 
 def main():
-    st.set_page_config("Chat Docs")
+    st.set_page_config(page_title="Chat Docs")
     st.title("Docu Detective.ai💁")
 
     user_question = st.text_input("Ask a Question from the Documents")
@@ -260,5 +257,5 @@ def main():
         st.write("---")
     st.session_state.conversation_history = conversation_history
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
